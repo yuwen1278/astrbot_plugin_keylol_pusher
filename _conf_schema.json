@@ -1,0 +1,75 @@
+{
+  "interval": {
+    "type": "int",
+    "description": "轮询间隔（秒）",
+    "hint": "多久检查一次订阅版块的新帖。最小 60 秒，建议 300~900，太小容易被论坛限流。",
+    "default": 600
+  },
+  "startup_delay": {
+    "type": "int",
+    "description": "启动延迟（秒）",
+    "hint": "插件加载后等待多久开始第一次轮询，避免和 AstrBot 启动抢资源。",
+    "default": 15
+  },
+  "skip_history": {
+    "type": "bool",
+    "description": "首次运行跳过历史帖",
+    "hint": "开启时，插件第一次运行只记录已有帖子、不推送，避免一次性刷屏。装好后想立刻看到效果请用 /其乐测试。",
+    "default": true
+  },
+  "max_per_run": {
+    "type": "int",
+    "description": "单次轮询最多推送条数",
+    "hint": "防止论坛恢复更新后一次性爆发推送。超出的帖子会在下次轮询继续推送。",
+    "default": 5
+  },
+  "fetch_detail": {
+    "type": "bool",
+    "description": "抓取帖子详情",
+    "hint": "开启后会额外访问帖子页面，获取完整正文与配图（RSS 自带简介被截断到约 300 字）。关闭可显著降低请求量，但推送内容只有摘要。",
+    "default": true
+  },
+  "send_images": {
+    "type": "bool",
+    "description": "推送帖子配图",
+    "hint": "从帖子首楼提取图片并随文字一起发出（单次最多 3 张）。图片由 blob.keylol.com 直链，部分 QQ 客户端可能加载较慢。",
+    "default": true
+  },
+  "content_limit": {
+    "type": "int",
+    "description": "正文截断长度（字符）",
+    "hint": "推送正文最多显示多少个字符，超出以「…」结尾。设为 0 表示不截断（不建议，长帖会被 QQ 折叠）。",
+    "default": 300
+  },
+  "cookie": {
+    "type": "string",
+    "description": "论坛 Cookie（可选）",
+    "hint": "部分版块（如需登录或绑定 Steam 账号）的正文对游客不可见。填入已登录账号的 Cookie 后即可抓取，例如 keylol_salt=xxx; keylol_auth=xxx; keylol_auth_key=xxx。注意：Cookie 属于敏感信息，请勿外泄。",
+    "secret": true,
+    "default": ""
+  },
+  "user_agent": {
+    "type": "string",
+    "description": "User-Agent（可选）",
+    "hint": "留空使用内置的 Chrome UA。一般不需要修改。",
+    "default": ""
+  },
+  "proxy": {
+    "type": "string",
+    "description": "HTTP 代理（可选）",
+    "hint": "访问论坛不通时填写，例如 http://127.0.0.1:7890。留空表示直连。",
+    "default": ""
+  },
+  "timeout": {
+    "type": "int",
+    "description": "请求超时（秒）",
+    "hint": "单次 HTTP 请求的超时时间。",
+    "default": 20
+  },
+  "retries": {
+    "type": "int",
+    "description": "请求重试次数",
+    "hint": "请求失败后的重试次数。设为 0 表示不重试。",
+    "default": 2
+  }
+}
