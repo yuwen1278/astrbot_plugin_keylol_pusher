@@ -47,6 +47,10 @@ KV_SEEN = "keylol_seen_tids"
 MAX_IMAGES_PER_PUSH = 3
 # 已推送 tid 的保留条数
 MAX_SEEN = 4000
+# 可安全推送的图片扩展名。QQ 官方 API 的富媒体接口只认常见位图，
+# 碰到 .avif / .webp / .svg 等会报「富媒体文件格式不支持」并重试到失败，
+# 所以直接跳过这类图，宁可不发图也不让整条推送卡在重试上。
+SAFE_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".bmp")
 
 
 # --------------------------------------------------------------------------- #
@@ -147,6 +151,24 @@ def _match_keywords(
     return any(kw.lower() in blob for kw in keywords if kw)
 
 
+def _pick_sendable_images(images: list[str]) -> list[str]:
+    """挑出可以安全推送的图片，最多 MAX_IMAGES_PER_PUSH 张。
+
+    部分图床会返回 .avif/.webp 等格式，QQ 官方富媒体接口不认，会一直重试到
+    失败并拖慢整条推送，因此这里按扩展名先过滤一遍。
+    """
+    picked: list[str] = []
+    for url in images:
+        path = url.split("?", 1)[0].lower()
+        if not path.endswith(SAFE_IMAGE_EXTS):
+            logger.debug(f"[keylol] 跳过不支持的图片格式: {url}")
+            continue
+        picked.append(url)
+        if len(picked) >= MAX_IMAGES_PER_PUSH:
+            break
+    return picked
+
+
 # --------------------------------------------------------------------------- #
 # 插件主体
 # --------------------------------------------------------------------------- #
@@ -201,6 +223,7 @@ class KeylolPusherPlugin(Star):
         if not self._data_path:
             self._data_path = self._resolve_data_path()
         await self._load_state()
+        self._restore_qq_scenes()
         self._client = self._build_client()
         self._running = True
         self._task = asyncio.create_task(self._poll_loop())
@@ -208,6 +231,61 @@ class KeylolPusherPlugin(Star):
             f"[keylol] 推送服务已启动，订阅会话 {len(self.store.data)} 个，"
             f"轮询间隔 {self._interval()} 秒"
         )
+
+    def _restore_qq_scenes(self, umos: list[str] | None = None) -> int:
+        """为会话补回 QQ 官方适配器的会话场景记录。
+
+        QQ 官方 API 的主动推送要求适配器内存里有该会话的 scene（"group"/"friend"），
+        而这份记录只在收到该会话的消息时写入、重启即丢。订阅本身就是由会话主动
+        发指令建立的，所以按订阅里的会话类型补登记是安全的；否则群里一条都推不
+        出去（适配器会静默丢弃且不报错）。
+
+        Args:
+            umos: 只处理这些会话；为 None 时处理全部已订阅会话。
+
+        Returns:
+            成功补登记的 (会话, 平台) 数量。
+        """
+        restored = 0
+        try:
+            platforms = list(self.context.platform_manager.platform_insts)
+        except Exception as exc:  # noqa: BLE001 - 拿不到平台列表就跳过
+            logger.debug(f"[keylol] 无法枚举平台实例: {exc}")
+            return 0
+        targets = self.store.targets()
+        if umos is not None:
+            wanted = set(umos)
+            targets = [(u, m) for u, m in targets if u in wanted]
+        for umo, _meta in targets:
+            parts = umo.split(":", 2)
+            if len(parts) != 3:
+                continue
+            platform_id, msg_type, session_id = parts
+            if msg_type == "GroupMessage":
+                scene = "group"
+            elif msg_type == "FriendMessage":
+                scene = "friend"
+            else:
+                continue
+            for platform in platforms:
+                try:
+                    if str(platform.meta().id) != platform_id:
+                        continue
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"[keylol] 读取平台 ID 失败: {exc}")
+                    continue
+                remember = getattr(platform, "remember_session_scene", None)
+                if remember is None:
+                    continue
+                for sid in {session_id, session_id.rsplit("_", 1)[-1]}:
+                    try:
+                        remember(sid, scene)
+                        restored += 1
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug(f"[keylol] 补登记会话场景失败 {sid}: {exc}")
+        if restored and umos is None:
+            logger.info(f"[keylol] 已为 {restored} 个已订阅会话补回推送场景")
+        return restored
 
     def _resolve_data_path(self) -> str:
         candidates: list[str] = []
@@ -289,6 +367,8 @@ class KeylolPusherPlugin(Star):
             self._seen_order = [str(x) for x in seen_raw]
 
     async def _save_state(self) -> None:
+        if not self._data_path:
+            self._data_path = self._resolve_data_path()
         payload = {
             "subscriptions": self.store.to_dict(),
             "seen": self._seen_order[-MAX_SEEN:],
@@ -351,6 +431,8 @@ class KeylolPusherPlugin(Star):
         self._last_run = time.time()
         self._last_error = ""
         pushed = 0
+        marked = 0
+        threads_sent = 0
         fids = sorted(self.store.all_forums())
         if not fids:
             return 0
@@ -358,6 +440,8 @@ class KeylolPusherPlugin(Star):
         first_run = startup or not self.seen
 
         for fid in fids:
+            if threads_sent >= max_per_run:
+                break
             try:
                 items = await self._client.fetch_rss(fid)
             except KeylolError as exc:
@@ -370,13 +454,15 @@ class KeylolPusherPlugin(Star):
                     continue
                 targets = self._targets_for(fid, item)
                 if not targets:
-                    self._mark_seen(item.tid)
+                    if self._mark_seen(item.tid):
+                        marked += 1
                     continue
                 if first_run and bool(self._cfg("skip_history", True)):
                     # 首次运行只记录不推送，避免一次性刷屏历史帖
-                    self._mark_seen(item.tid)
+                    if self._mark_seen(item.tid):
+                        marked += 1
                     continue
-                if pushed >= max_per_run:
+                if threads_sent >= max_per_run:
                     break
                 detail: ThreadDetail | None = None
                 if bool(self._cfg("fetch_detail", True)):
@@ -389,10 +475,16 @@ class KeylolPusherPlugin(Star):
                 if sent:
                     pushed += sent
                     self._push_count += sent
-                self._mark_seen(item.tid)
+                    threads_sent += 1
+                if self._mark_seen(item.tid):
+                    marked += 1
             await asyncio.sleep(1.0)
-        if pushed:
+        # 即使一条都没推送（首轮只记录 / 关键字全不匹配），只要 seen 有新增就要落盘，
+        # 否则重启后这批帖子会被当成历史帖重新吞一次。
+        if pushed or marked:
             await self._save_state()
+            if marked and not pushed:
+                logger.debug(f"[keylol] 本轮仅记录 {marked} 条已见帖子，未推送")
         return pushed
 
     def _targets_for(
@@ -411,9 +503,10 @@ class KeylolPusherPlugin(Star):
                     break
         return result
 
-    def _mark_seen(self, tid: str) -> None:
+    def _mark_seen(self, tid: str) -> bool:
+        """记录一条已处理帖子，返回是否为新记录。"""
         if tid in self.seen:
-            return
+            return False
         self.seen.add(tid)
         self._seen_order.append(tid)
         if len(self._seen_order) > MAX_SEEN * 2:
@@ -421,6 +514,7 @@ class KeylolPusherPlugin(Star):
             for old in self._seen_order[:drop]:
                 self.seen.discard(old)
             self._seen_order = self._seen_order[drop:]
+        return True
 
     # ------------------------------------------------------------------ #
     # 发送
@@ -439,11 +533,14 @@ class KeylolPusherPlugin(Star):
             and detail.visible
             and bool(self._cfg("send_images", True))
         ):
-            images = detail.images[:MAX_IMAGES_PER_PUSH]
+            images = _pick_sendable_images(detail.images)
 
         chain = self._build_chain(text, images)
         ok = 0
         for umo, _sub in targets:
+            # 有些平台（QQ 官方 API）在缺少会话场景记录时会静默丢弃消息但返回成功，
+            # 所以每次推送前都补一次登记，避免“日志说已推送、实际没发出去”。
+            self._restore_qq_scenes([umo])
             try:
                 sent = await self.context.send_message(umo, chain)
                 if sent:
@@ -604,7 +701,7 @@ class KeylolPusherPlugin(Star):
             item, detail, content_limit=int(self._cfg("content_limit", 300) or 300)
         )
         images = (
-            detail.images[:MAX_IMAGES_PER_PUSH]
+            _pick_sendable_images(detail.images)
             if detail is not None and detail.visible
             else []
         )

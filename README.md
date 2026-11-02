@@ -104,9 +104,9 @@
 | `interval` | int | `600` | 轮询间隔（秒），最小 60。太小容易被论坛限流，建议 300~900。 |
 | `startup_delay` | int | `15` | 启动后等待多久开始首次轮询（秒）。 |
 | `skip_history` | bool | `true` | 首次运行只记录历史帖、不推送。关闭后首次会推最近若干条。 |
-| `max_per_run` | int | `5` | 单次轮询最多推送条数，防止爆发刷屏；余下的下次继续。 |
+| `max_per_run` | int | `5` | 单次轮询最多推送的帖子数（按帖子计数，推给多个会话仍算 1 条）；余下的下次继续。 |
 | `fetch_detail` | bool | `true` | 是否抓帖子页拿完整正文与配图。关闭只推 RSS 摘要（请求量更小）。 |
-| `send_images` | bool | `true` | 是否附带首楼配图（单次最多 3 张）。 |
+| `send_images` | bool | `true` | 是否附带首楼配图（单次最多 3 张；`.avif`/`.webp` 等 QQ 官方接口不认的格式会自动跳过）。 |
 | `content_limit` | int | `300` | 正文截断长度（字符），`0` 表示不截断。 |
 | `cookie` | string (secret) | `""` | 论坛 Cookie（可选）。部分需登录/绑定 Steam 的版块正文对游客不可见，填入后即可抓取。 |
 | `user_agent` | string | `""` | 自定义 UA，留空用内置 Chrome UA。 |
@@ -202,6 +202,9 @@ data/plugin_data/astrbot_plugin_keylol_pusher/state.json
 
 **Q：推送的图片加载不出来？**
 图片是 `blob.keylol.com` 直链，部分 QQ 客户端/网络环境加载较慢。可把 `send_images` 关掉只推文字。
+
+**Q：图片发不出来 / 日志里有「富媒体文件格式不支持」？**
+插件已自动过滤掉 QQ 官方接口不支持的格式（`.avif`、`.webp` 等），只剩文字照常送达。若某帖全部配图都是这类格式，那条推送就是纯文字，属正常现象。
 
 **Q：会不会推重复？**
 不会。已推送的 tid 会持久化，重启后继续去重。
