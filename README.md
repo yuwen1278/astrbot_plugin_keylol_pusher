@@ -47,7 +47,12 @@
    pip install -r requirements.txt
    ```
 
-> **平台限制**：主动推送依赖 `context.send_message()`，目前仅 **aiocqhttp（OneBot v11 / NapCat / Lagrange 等 QQ 协议端）** 支持。`qq_official`（QQ 官方机器人）不支持主动消息，插件在该平台下无法推送。
+> **平台说明**：主动推送依赖 `context.send_message()`，支持 **aiocqhttp（OneBot v11 / NapCat / Lagrange 等 QQ 协议端）** 与 **qq_official / qq_official_webhook（QQ 官方机器人）**。
+>
+> `qq_official` 的主动推送有额外前提（AstrBot v4.29+ 已内置适配）：
+> - **群聊**：该群必须先给机器人发过消息（指令本身就能满足），适配器才会记住群场景并允许主动推送；否则日志会打印 `[QQOfficial] No cached msg_id for session: ... skip send_by_session`。
+> - **私聊**：无此前置条件，直接可推。
+> - 官方机器人受腾讯侧频率策略约束，推送过于频繁可能被限流；建议把 `interval` 设在 600 秒以上。
 
 ---
 

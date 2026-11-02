@@ -18,6 +18,8 @@ author: yuwen1278
 repo: https://github.com/yuwen1278/astrbot_plugin_keylol_pusher
 support_platforms:
   - aiocqhttp
+  - qq_official
+  - qq_official_webhook
 astrbot_version: ">=4.9.2,<5"
 tags:
   - 论坛
