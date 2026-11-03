@@ -288,18 +288,24 @@ class KeylolPusherPlugin(Star):
         return restored
 
     def _resolve_data_path(self) -> str:
-        """返回插件专属的持久化目录（AstrBot 规定的 data/plugin_data/<name>）。
+        """返回插件专属的持久化目录，且必定位于 AstrBot 的 data 目录之内。
 
-        只认 AstrBot 的 data 目录，绝不回退到用户主目录或当前工作目录，
-        以免订阅关系与去重记录散落在数据目录之外、影响备份与迁移。
-        取不到路径或目录不可写时返回空串，此时全部状态改由 KV 接口承载。
+        规范要求：插件只能把数据写进 ``data/plugin_data/<plugin_name>/``，或者
+        完全依赖 KV 接口。这里只认 ``get_astrbot_data_path()`` 推导出的那一个
+        目录，**不存在任何 home 目录、当前工作目录或其它位置的候选路径**；
+        取不到根目录或目录不可写时返回空串，此时全部状态改由 KV 接口承载。
         """
         try:
             from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
-            path = os.path.join(get_astrbot_data_path(), "plugin_data", PLUGIN_NAME)
+            data_root = os.path.abspath(get_astrbot_data_path())
         except Exception as exc:  # noqa: BLE001 - 非 AstrBot 环境下没有这个模块
             logger.debug(f"[keylol] 无法定位 AstrBot data 目录，改用 KV 存储: {exc}")
+            return ""
+
+        path = os.path.join(data_root, "plugin_data", PLUGIN_NAME)
+        if not self._inside_data_root(path, data_root):
+            logger.warning(f"[keylol] 数据目录越界，改用 KV 存储: {path}")
             return ""
 
         try:
@@ -312,6 +318,16 @@ class KeylolPusherPlugin(Star):
             logger.warning(f"[keylol] 数据目录不可写，改用 KV 存储: {path} ({exc})")
             return ""
         return path
+
+    @staticmethod
+    def _inside_data_root(path: str, data_root: str) -> bool:
+        """校验 path 确实落在 data_root 之下（防符号链接、相对路径等越界）。"""
+        try:
+            real_path = os.path.realpath(path)
+            real_root = os.path.realpath(data_root)
+            return os.path.commonpath([real_path, real_root]) == real_root
+        except (OSError, ValueError):
+            return False
 
     @property
     def _state_file(self) -> str:

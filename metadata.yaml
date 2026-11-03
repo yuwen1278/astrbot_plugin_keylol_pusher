@@ -14,7 +14,7 @@ desc: |-
 
   指令：/其乐添加 <fid或版块名> [关键字]、/其乐删除 <fid>、/其乐列表、
   /其乐测试、/其乐状态、/其乐版块、/其乐帮助
-version: 1.0.1
+version: 1.0.2
 author: yuwen1278
 repo: https://github.com/yuwen1278/astrbot_plugin_keylol_pusher
 support_platforms:
