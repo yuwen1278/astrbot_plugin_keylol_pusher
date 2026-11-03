@@ -288,33 +288,29 @@ class KeylolPusherPlugin(Star):
         return restored
 
     def _resolve_data_path(self) -> str:
-        candidates: list[str] = []
+        """返回插件专属的持久化目录（AstrBot 规定的 data/plugin_data/<name>）。
+
+        只认 AstrBot 的 data 目录，绝不回退到用户主目录或当前工作目录，
+        以免订阅关系与去重记录散落在数据目录之外、影响备份与迁移。
+        取不到路径或目录不可写时返回空串，此时全部状态改由 KV 接口承载。
+        """
         try:
             from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
-            candidates.append(
-                os.path.join(get_astrbot_data_path(), "plugin_data", PLUGIN_NAME)
-            )
+            path = os.path.join(get_astrbot_data_path(), "plugin_data", PLUGIN_NAME)
         except Exception as exc:  # noqa: BLE001 - 非 AstrBot 环境下没有这个模块
-            logger.debug(f"[keylol] 无法定位 AstrBot data 目录: {exc}")
-        candidates.append(os.path.join(os.getcwd(), "data", "plugin_data", PLUGIN_NAME))
-        candidates.append(os.path.join(os.path.expanduser("~"), ".keylol_pusher"))
-        path = ""
-        for cand in candidates:
-            try:
-                os.makedirs(cand, exist_ok=True)
-                probe = os.path.join(cand, ".write_test")
-                with open(probe, "w", encoding="utf-8") as fh:
-                    fh.write("ok")
-                os.remove(probe)
-                path = cand
-                break
-            except Exception as exc:  # noqa: BLE001 - 换个目录继续试
-                logger.debug(f"[keylol] 目录不可写 {cand}: {exc}")
-                continue
-        if not path:
-            path = os.path.expanduser("~/.keylol_pusher")
+            logger.debug(f"[keylol] 无法定位 AstrBot data 目录，改用 KV 存储: {exc}")
+            return ""
+
+        try:
             os.makedirs(path, exist_ok=True)
+            probe = os.path.join(path, ".write_test")
+            with open(probe, "w", encoding="utf-8") as fh:
+                fh.write("ok")
+            os.remove(probe)
+        except Exception as exc:  # noqa: BLE001 - 目录不可写则只用 KV
+            logger.warning(f"[keylol] 数据目录不可写，改用 KV 存储: {path} ({exc})")
+            return ""
         return path
 
     @property
@@ -347,7 +343,8 @@ class KeylolPusherPlugin(Star):
         if not self._data_path:
             self._data_path = self._resolve_data_path()
         raw: dict[str, Any] = {}
-        raw = await asyncio.to_thread(self._read_state_file)
+        if self._data_path:
+            raw = await asyncio.to_thread(self._read_state_file)
 
         # 优先读 KV 存储（AstrBot >= 4.9.2），失败则退回本地文件
         subs_data = None
@@ -361,7 +358,13 @@ class KeylolPusherPlugin(Star):
             subs_data = raw.get("subscriptions") or {}
         self.store = SubscriptionStore(subs_data if isinstance(subs_data, dict) else {})
 
-        seen_raw = raw.get("seen") or []
+        seen_raw: Any = None
+        try:
+            seen_raw = await self.get_kv_data(KV_SEEN, None)
+        except Exception:  # noqa: BLE001
+            seen_raw = None
+        if not seen_raw:
+            seen_raw = raw.get("seen") or []
         if isinstance(seen_raw, list):
             self.seen = {str(x) for x in seen_raw}
             self._seen_order = [str(x) for x in seen_raw]
@@ -369,22 +372,29 @@ class KeylolPusherPlugin(Star):
     async def _save_state(self) -> None:
         if not self._data_path:
             self._data_path = self._resolve_data_path()
+        seen_tail = self._seen_order[-MAX_SEEN:]
         payload = {
             "subscriptions": self.store.to_dict(),
-            "seen": self._seen_order[-MAX_SEEN:],
+            "seen": seen_tail,
             "updated_at": int(time.time()),
         }
-        try:
-            await asyncio.to_thread(self._write_state_file, payload)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"[keylol] 写入本地状态失败: {exc}")
+        # 本地缓存只在拿到合规数据目录时写，绝不写到别处
+        if self._data_path:
+            try:
+                await asyncio.to_thread(self._write_state_file, payload)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[keylol] 写入本地状态失败: {exc}")
         try:
             await self.put_kv_data(
                 KV_SUBSCRIPTIONS,
                 json.dumps(self.store.to_dict(), ensure_ascii=False),
             )
         except Exception as exc:  # noqa: BLE001 - KV 不可用时本地文件已写入
-            logger.debug(f"[keylol] 写入 KV 失败: {exc}")
+            logger.debug(f"[keylol] 写入订阅 KV 失败: {exc}")
+        try:
+            await self.put_kv_data(KV_SEEN, seen_tail)
+        except Exception as exc:  # noqa: BLE001 - 同上
+            logger.debug(f"[keylol] 写入去重记录 KV 失败: {exc}")
 
     async def terminate(self) -> None:
         self._running = False

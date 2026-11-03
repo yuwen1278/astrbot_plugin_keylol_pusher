@@ -161,7 +161,7 @@
 - **发现新帖用 RSS**，因为它是论坛官方输出、结构稳定、不受页面改版影响；
 - **正文用帖子页解析**，因为 RSS 的 `description` 被截断到约 300 字且带 BBCode；
 - **订阅关系用 `unified_msg_origin` 作为键**（形如 `aiocqhttp:GroupMessage:123456`），所以群与私聊天然隔离；
-- **状态双写**：`data/plugin_data/astrbot_plugin_keylol_pusher/state.json` 与 AstrBot KV 存储，任一可用即可恢复。
+- **状态双写**：`data/plugin_data/astrbot_plugin_keylol_pusher/state.json` 与 AstrBot KV 存储，任一可用即可恢复。所有持久化数据只落在 AstrBot 的 `data/plugin_data/` 内（或 KV 接口），不会写到用户主目录或工作目录。
 
 ---
 
@@ -170,6 +170,8 @@
 ```
 data/plugin_data/astrbot_plugin_keylol_pusher/state.json
 ```
+
+插件只使用 AstrBot 规定的数据目录：优先 `data/plugin_data/astrbot_plugin_keylol_pusher/`，同时把订阅关系与去重记录通过 `put_kv_data` / `get_kv_data` 写入 KV 存储。若该目录不可写，插件不会退回到其它位置，而是仅依赖 KV 接口（日志会给出警告）。
 
 ```jsonc
 {
