@@ -35,11 +35,35 @@
     "hint": "从帖子首楼提取图片并随文字一起发出（单次最多 3 张）。图片由 blob.keylol.com 直链，部分 QQ 客户端可能加载较慢。",
     "default": true
   },
+  "show_content": {
+    "type": "bool",
+    "description": "推送里显示帖子内容",
+    "hint": "关闭后推送只保留版块、标题、作者、时间和链接，既不显示正文也不显示 AI 摘要（此时也不会再调用模型）。适合只想收到「有新帖了」提醒的场景。",
+    "default": true
+  },
   "content_limit": {
     "type": "int",
     "description": "正文截断长度（字符）",
-    "hint": "推送正文最多显示多少个字符，超出以「…」结尾。设为 0 表示不截断（不建议，长帖会被 QQ 折叠）。",
+    "hint": "未开启 AI 摘要时，推送正文最多显示多少个字符，超出以「…」结尾。设为 0 表示不截断（不建议，长帖会被 QQ 折叠）。开启 AI 摘要后此值不再生效。",
     "default": 300
+  },
+  "ai_summary": {
+    "type": "bool",
+    "description": "启用 AI 摘要",
+    "hint": "开启后调用 AstrBot 已配置的对话模型，把帖子正文概括成一段摘要再推送，不再显示全文。摘要失败时自动回落到正文截断，不影响推送。",
+    "default": false
+  },
+  "summary_length": {
+    "type": "int",
+    "description": "AI 摘要字数上限",
+    "hint": "摘要最多保留多少个汉字（40~500）。太长会被 QQ 折叠，建议 120~200。",
+    "default": 150
+  },
+  "summary_provider": {
+    "type": "string",
+    "description": "摘要使用的模型（可选）",
+    "hint": "填写 AstrBot 里某个模型提供商的 ID（例如 deepseek/deepseek-flash）。留空则使用默认对话模型。",
+    "default": ""
   },
   "cookie": {
     "type": "string",

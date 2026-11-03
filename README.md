@@ -107,7 +107,11 @@
 | `max_per_run` | int | `5` | 单次轮询最多推送的帖子数（按帖子计数，推给多个会话仍算 1 条）；余下的下次继续。 |
 | `fetch_detail` | bool | `true` | 是否抓帖子页拿完整正文与配图。关闭只推 RSS 摘要（请求量更小）。 |
 | `send_images` | bool | `true` | 是否附带首楼配图（单次最多 3 张；`.avif`/`.webp` 等 QQ 官方接口不认的格式会自动跳过）。 |
-| `content_limit` | int | `300` | 正文截断长度（字符），`0` 表示不截断。 |
+| `show_content` | bool | `true` | 推送里是否显示帖子内容。关闭后只推版块、标题、作者、时间与链接，正文和 AI 摘要都不显示，也不会再调用模型。 |
+| `content_limit` | int | `300` | 正文截断长度（字符），`0` 表示不截断。开启 AI 摘要后此项不再生效。 |
+| `ai_summary` | bool | `false` | 开启后调用 AstrBot 已配置的对话模型，把正文概括成一段摘要再推送，不再显示全文。 |
+| `summary_length` | int | `150` | AI 摘要字数上限（40~500），建议 120~200。 |
+| `summary_provider` | string | `""` | 指定摘要用的模型提供商 ID（如 `deepseek/deepseek-flash`），留空用默认对话模型。 |
 | `cookie` | string (secret) | `""` | 论坛 Cookie（可选）。部分需登录/绑定 Steam 的版块正文对游客不可见，填入后即可抓取。 |
 | `user_agent` | string | `""` | 自定义 UA，留空用内置 Chrome UA。 |
 | `proxy` | string | `""` | HTTP 代理，如 `http://127.0.0.1:7890`。 |
@@ -125,6 +129,25 @@
 3. 拼成 `keylol_salt=xxx; keylol_auth=xxx; keylol_auth_key=xxx` 填入配置。
 
 > Cookie 属于敏感凭据，配置项已标记为 `secret`，请勿分享配置文件。Cookie 过期后需重新获取。
+
+### 关于 AI 摘要
+
+开启 `ai_summary` 后，插件会把帖子的标题与正文交给 AstrBot 里已配置的对话模型，让模型概括成一段不超过 `summary_length` 个字的摘要，推送时用 `🤖` 前缀显示摘要、**不再显示帖子正文**：
+
+```
+📮 其乐 · 热点聚焦
+《冰汽时代2》DLC「激流」Steam 页面开放
+👤 万狐飞仙  🕘 11-03 01:51
+🤖 《冰汽时代2》新 DLC「激流」已开放 Steam 商店页面，预计明年推出，新增剧本与派系机制。
+🔗 https://keylol.com/t1054390-1-1
+```
+
+几点说明：
+
+- 摘要失败（模型报错、未配置模型、返回空）时**自动回落到正文截断**，推送不会因此中断。
+- 每次推送每帖调用一次模型。`max_per_run` 默认 5，即一轮最多 5 次调用。
+- 帖子正文对游客不可见时（见上方 Cookie 说明），模型只能看到标题，摘要质量会下降。
+- 想把推送压到最短，可关闭 `show_content`：此时既不显示正文也不显示摘要，也不会调用模型，只留标题与链接。
 
 ---
 

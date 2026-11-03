@@ -331,6 +331,69 @@ def shorten(text: str, limit: int) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# AI 摘要
+# --------------------------------------------------------------------------- #
+
+# 送进模型的正文上限：再长既费 token，也不会让摘要更准
+SUMMARY_INPUT_LIMIT = 4000
+
+SUMMARY_SYSTEM_PROMPT = (
+    "你是一个论坛帖子摘要助手。请用简体中文，把用户给出的论坛帖子概括成一段话。"
+    "要求：只陈述帖子本身讲了什么，不评论、不评价、不寒暄；"
+    "保留关键信息（游戏名、版本、价格、时间、活动规则、作者观点等）；"
+    "不要使用「本文」「这篇文章」「楼主」这类元叙述；"
+    "不要使用 Markdown、列表、标题或代码块；直接输出一段连续的文字。"
+    "字数必须严格控制在上限之内，宁可少写也不要超出，超出的部分会被直接截掉。"
+)
+
+
+def build_summary_prompt(
+    item: ThreadItem, detail: ThreadDetail | None = None, *, limit: int = 150
+) -> str:
+    """把帖子内容拼成送给模型的提示词。
+
+    纯函数，不依赖 AstrBot，方便脱离框架做单元测试。
+    """
+    content = ""
+    if detail is not None and detail.visible and detail.content:
+        content = detail.content
+    elif item.description:
+        content = item.description
+    content = shorten(content, SUMMARY_INPUT_LIMIT)
+
+    forum = item.forum_name or (detail.forum_name if detail else "")
+    parts = [f"版块：{forum}" if forum else "", f"标题：{item.title.strip()}"]
+    if content:
+        parts.append(f"正文：\n{content}")
+    else:
+        parts.append("正文：（无正文，仅有标题）")
+    target = max(20, int(limit or 150))
+    parts.append(f"请用不超过 {target} 个汉字概括这段内容。")
+    return "\n".join(part for part in parts if part)
+
+
+def clean_summary(text: str, limit: int = 0) -> str:
+    """清洗模型输出：去掉引号、前缀、「摘要：」这类包装，再按需截断。"""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    # 模型常把整段包在引号或「摘要：」前缀里
+    text = re.sub(r"^(?:摘要|总结|概括|内容摘要)\s*[:：]\s*", "", text)
+    text = text.strip().strip("\"'“”‘’「」『』")
+    # 折行压平，避免把模型输出的分点原样推给用户
+    text = re.sub(r"\s*\n+\s*", " ", text).strip()
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    if limit and len(text) > limit:
+        # 优先在句末标点处收尾，避免摘要以半句话被切断
+        head = text[:limit]
+        cut = max(head.rfind(mark) for mark in "。！？；")
+        if cut >= limit * 0.6:
+            return head[: cut + 1]
+        return shorten(text, limit)
+    return text
+
+
+# --------------------------------------------------------------------------- #
 # 数据结构
 # --------------------------------------------------------------------------- #
 
@@ -738,8 +801,15 @@ def format_push_text(
     *,
     content_limit: int = 300,
     show_category: bool = True,
+    summary: str = "",
+    show_content: bool = True,
 ) -> str:
-    """拼出一条推送消息的正文。"""
+    """拼出一条推送消息的正文。
+
+    传入 `summary` 时只展示 AI 摘要，不再展示帖子全文；
+    摘要为空则回落到原来的正文截断逻辑。
+    `show_content=False` 时既不展示摘要也不展示正文，只留标题与链接。
+    """
     forum = item.forum_name or (detail.forum_name if detail else "")
     header = f"📮 其乐 · {forum}" if forum else "📮 其乐论坛新帖"
 
@@ -747,11 +817,12 @@ def format_push_text(
     category = item.category or ""
     if show_category and category and category != forum:
         lines.append(f"🏷 {category}")
-    # 论坛标题本身常带书名号（如《冰汽时代2》DLC…），避免出现《《…》》这样的双括号
+    # 论坛标题常自带书名号（如《冰汽时代2》DLC…），或者句中已经引了作品名
+    # （如「科幻动作RPG《Zack Bishop…》Steam页面开放」），这两种情况都不再加外层书名号，
+    # 否则会出现《《…》》或《…《…》…》这样嵌套的书名号。
     title = item.title.strip()
-    lines.append(
-        title if title[:1] in {"《", "【", "[", "（", "「"} else f"《{title}》"
-    )
+    has_bracket = any(mark in title for mark in "《》【】「」")
+    lines.append(title if has_bracket else f"《{title}》")
 
     meta: list[str] = []
     author = item.author or (detail.author if detail else "")
@@ -765,15 +836,21 @@ def format_push_text(
     if meta:
         lines.append("　".join(meta))
 
-    body = ""
-    if detail is not None and detail.visible and detail.content:
-        body = detail.content
-    elif item.description:
-        body = item.description
-    body = shorten(body, content_limit)
-    if body:
+    if not show_content:
+        pass
+    elif summary:
         lines.append("")
-        lines.append(body)
+        lines.append(f"🤖 {summary}")
+    else:
+        body = ""
+        if detail is not None and detail.visible and detail.content:
+            body = detail.content
+        elif item.description:
+            body = item.description
+        body = shorten(body, content_limit)
+        if body:
+            lines.append("")
+            lines.append(body)
 
     lines.append("")
     lines.append(f"🔗 {item.url}")

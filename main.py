@@ -30,10 +30,13 @@ from astrbot.api.star import Context, Star
 
 from .kpusher_core import (
     KNOWN_FORUMS,
+    SUMMARY_SYSTEM_PROMPT,
     KeylolClient,
     KeylolError,
     ThreadDetail,
     ThreadItem,
+    build_summary_prompt,
+    clean_summary,
     format_push_text,
     guess_forum_name,
     shorten,
@@ -47,6 +50,8 @@ KV_SEEN = "keylol_seen_tids"
 MAX_IMAGES_PER_PUSH = 3
 # 已推送 tid 的保留条数
 MAX_SEEN = 4000
+# AI 摘要默认字数上限
+DEFAULT_SUMMARY_LENGTH = 150
 # 可安全推送的图片扩展名。QQ 官方 API 的富媒体接口只认常见位图，
 # 碰到 .avif / .webp / .svg 等会报「富媒体文件格式不支持」并重试到失败，
 # 所以直接跳过这类图，宁可不发图也不让整条推送卡在重试上。
@@ -216,6 +221,57 @@ class KeylolPusherPlugin(Star):
             proxy=str(self._cfg("proxy", "") or ""),
             retries=int(self._cfg("retries", 2) or 2),
         )
+
+    # ------------------------------------------------------------------ #
+    # AI 摘要
+    # ------------------------------------------------------------------ #
+    async def _summarize(self, item: ThreadItem, detail: ThreadDetail | None) -> str:
+        """调用 AstrBot 已配置的对话模型生成帖子摘要。
+
+        失败一律返回空串，由调用方回落到原文截断，绝不让摘要影响推送本身。
+        """
+        if not bool(self._cfg("ai_summary", False)):
+            return ""
+        limit = int(
+            self._cfg("summary_length", DEFAULT_SUMMARY_LENGTH)
+            or DEFAULT_SUMMARY_LENGTH
+        )
+        limit = max(40, min(limit, 500))
+        try:
+            provider = await self._get_provider()
+            if provider is None:
+                logger.debug("[keylol] 未找到可用的对话模型，跳过 AI 摘要")
+                return ""
+            prompt = build_summary_prompt(item, detail, limit=limit)
+            response = await provider.text_chat(
+                prompt=prompt,
+                system_prompt=SUMMARY_SYSTEM_PROMPT,
+            )
+            raw = getattr(response, "completion_text", "") or ""
+            summary = clean_summary(raw, limit)
+            if not summary:
+                logger.debug(f"[keylol] 摘要结果为空 tid={item.tid}")
+            return summary
+        except Exception as exc:  # noqa: BLE001 - 摘要失败不应影响推送
+            logger.warning(f"[keylol] 生成 AI 摘要失败 tid={item.tid}: {exc}")
+            return ""
+
+    async def _get_provider(self):
+        """取用于摘要的模型：优先用配置里指定的 provider，否则用默认对话模型。"""
+        wanted = str(self._cfg("summary_provider", "") or "").strip()
+        try:
+            if wanted:
+                provider = self.context.get_provider_by_id(wanted)
+                if provider is not None:
+                    return provider
+                logger.debug(f"[keylol] 指定的模型 {wanted} 不存在，改用默认模型")
+            getter = getattr(self.context, "get_using_provider_async", None)
+            if callable(getter):
+                return await getter()
+            return self.context.get_using_provider()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"[keylol] 获取对话模型失败: {exc}")
+            return None
 
     async def _startup(self) -> None:
         if self._running:
@@ -552,7 +608,16 @@ class KeylolPusherPlugin(Star):
         targets: list[tuple[str, dict[str, Any]]],
     ) -> int:
         limit = int(self._cfg("content_limit", 300) or 300)
-        text = format_push_text(item, detail, content_limit=limit)
+        show_content = bool(self._cfg("show_content", True))
+        # 关闭正文展示时就不必再花一次模型调用了
+        summary = await self._summarize(item, detail) if show_content else ""
+        text = format_push_text(
+            item,
+            detail,
+            content_limit=limit,
+            summary=summary,
+            show_content=show_content,
+        )
         images: list[str] = []
         if (
             detail is not None
@@ -577,7 +642,7 @@ class KeylolPusherPlugin(Star):
                 logger.error(f"[keylol] 推送到 {umo} 出错: {exc}")
             await asyncio.sleep(0.6)
         if ok:
-            logger.info(f"[keylol] 已推送《{item.title}》到 {ok} 个会话")
+            logger.info(f"[keylol] 已推送「{item.title}」到 {ok} 个会话")
         return ok
 
     def _build_chain(self, text: str, images: list[str]):
@@ -723,8 +788,13 @@ class KeylolPusherPlugin(Star):
             detail = await self._client.fetch_thread(item.tid)
         except KeylolError as exc:
             logger.debug(f"[keylol] 测试抓详情失败: {exc}")
+        show_content = bool(self._cfg("show_content", True))
         text = format_push_text(
-            item, detail, content_limit=int(self._cfg("content_limit", 300) or 300)
+            item,
+            detail,
+            content_limit=int(self._cfg("content_limit", 300) or 300),
+            summary=await self._summarize(item, detail) if show_content else "",
+            show_content=show_content,
         )
         images = (
             _pick_sendable_images(detail.images)
