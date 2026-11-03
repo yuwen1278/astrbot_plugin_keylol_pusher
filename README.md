@@ -1,5 +1,7 @@
 # 其乐论坛推送 (astrbot_plugin_keylol_pusher)
 
+<img src="logo.png" width="96" alt="其乐论坛推送">
+
 把[其乐论坛](https://keylol.com)的新帖自动推送到 **QQ 群** 或 **QQ 私聊**。
 
 插件通过论坛自带的 RSS 增量发现新帖，再按需抓取帖子首楼正文与配图，推送前会清理 Steam 小部件、广告位等噪声。群和私聊各自独立订阅，互不影响。
